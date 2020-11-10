@@ -21,4 +21,11 @@ print "conf: $conf\n" if ( $debug );
 
 my($transfer) = new Transfer( debug => $debug );
 my(%conf) = $transfer->readconf($conf);
-print Dumper(\%conf);
+
+my($rc);
+$rc = $transfer->validateconf(%conf);
+unless ( $rc ) {
+  die "Something wrong in $conf\n";
+}
+
+$transfer->transfer();
