@@ -20,12 +20,10 @@ GetOptions (
 print "conf: $conf\n" if ( $debug );
 
 my($transfer) = new Transfer( debug => $debug );
-my(%conf) = $transfer->readconf($conf);
-
-my($rc);
-$rc = $transfer->validateconf(%conf);
+my($rc) = $transfer->readconf($conf);
 unless ( $rc ) {
   die "Something wrong in $conf\n";
 }
+print Dumper(\$transfer);
 
 $transfer->transfer();

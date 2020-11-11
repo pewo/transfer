@@ -123,10 +123,14 @@ sub readconf() {
     print "value: $value\n" if ( $debug );
     next unless ( defined($key) );
     next unless ( defined($value) );
-    $res{$key}=$value;
+    $self->config($key,$value);
+    #$res{$key}=$value;
   }
 
-  return(%res);
+  return($self->validateconf());
+
+   
+  #return(%res);
        
 }
 
@@ -167,27 +171,24 @@ sub validateconf() {
   my(%conf) = @_;
 
   my($rc);
-  my($src) = $conf{src};
+  my($src) = $self->config("src");
   $rc = $self->checkdir($src);
   unless ( $rc ) {
     return(undef);
   }
-  $self->config("src",$src);
-  my($dst) = $conf{dst};
+  my($dst) = $self->config("dst");
   $rc = $self->checkdir($dst);
   unless ( $rc ) {
     return(undef);
   }
-  $self->config("dst",$dst);
 
-  my($ext) = $conf{ext};
+  my($ext) = $self->config("ext");
   unless ( defined($ext) ) {
     print "Missing ext in config\n";
     return(undef);
   }
-  $self->config("ext",$ext);
 
-  my($sum) = $conf{sum};
+  my($sum) = $self->config("sum");
   unless ( defined($sum) ) {
     print "Missing sum in config\n";
     return(undef);
@@ -203,11 +204,23 @@ sub validateconf() {
   }
        
   if ( defined($bin) && -x $bin ) {
-    $self->config("sum",$bin);
+    $self->config("sumbin",$bin);
   }
   else {
     print "Missing executable $sum\n";
     return(undef);
+  }
+
+  my($maxtransfer) = $self->config("maxtransfer");
+  unless ( $maxtransfer ) {
+    $maxtransfer = 2 * 1000 * 1000 * 1000; # 2 GB
+    $self->config("maxtransfer",$maxtransfer);
+  }
+
+  my($splitbytes) = $self->config("splitbytes");
+  unless ( $splitbytes ) {
+    $splitbytes =  512 * 1000 * 1000; # 512 MB
+    $self->config("splitbytes",$splitbytes);
   }
 
   return(1);
@@ -219,7 +232,7 @@ sub checksum() {
   my(@cmd) = @_;
   my(@res) = ();
   delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
-  my($sum) = $self->config("sum");
+  my($sumbin) = $self->config("sumbin");
 
   #
   # Tatinting srcext
@@ -230,14 +243,14 @@ sub checksum() {
   $srcext = $1; 
 
   #
-  # Tainting $sum
+  # Tainting $sumbin
   #
-  unless ($sum =~ m#^([\/\w.-]+)$#) {                  # $1 is untainted
-    die "filename '$sum' has invalid characters.\n";
+  unless ($sumbin =~ m#^([\/\w.-]+)$#) {                  # $1 is untainted
+    die "filename '$sumbin' has invalid characters.\n";
   }
-  $sum = $1;
+  $sumbin = $1;
 
-  open( my $listing, "-|", $sum,"--check","--ignore-missing",$srcext) or croak "error executing command: stopped";
+  open( my $listing, "-|", $sumbin,"--check","--ignore-missing",$srcext) or croak "error executing command: stopped";
   while (<$listing>) {
     next unless ( defined($_) );
     chomp;
@@ -248,6 +261,27 @@ sub checksum() {
   }
   close($listing);
   return(@res);
+}
+
+sub wait_until_transfered() {
+  my($self) = shift;
+  my($file) = shift;
+  return(undef) unless ( defined($file) );
+  my($dst) = $self->config("dst");
+  my($dstfile) = $dst . "/" . $file;
+  unless ($dstfile =~ m#^([\/\w.-]+)$#) {                  # $1 is untainted
+      die "filename '$dstfile' has invalid characters.\n";
+  }
+  $dstfile = $1;
+  my($start) = time;
+  my($i) = 1;
+  while ( 1 ) {
+    last unless ( -r $dstfile );
+    $i++;
+    print "Wating($i) for $dstfile to be transfered Started:" . localtime($start) . ", Now: " . localtime(time) . "\n";
+    sleep(10);
+  }
+  return($i);
 }
 
 sub mover() {
@@ -268,6 +302,15 @@ sub mover() {
   }
   $dstfile = $1;
 
+  print "Checking [$_]\n";
+  my($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,
+                       $atime,$mtime,$ctime,$blksize,$blocks)
+                           = stat($srcfile);
+  unless ( defined($size) ) {
+    print "unable to stat $_: $!\n";
+    return(undef);
+  }
+
   my($rc) = 0;
   $rc =  move($srcfile, $dstfile);
   print "move($srcfile,$dstfile) = $rc";
@@ -275,6 +318,10 @@ sub mover() {
     print " (error: $!)";
   }
   print "\n";
+  if ( $dstfile =~ /README/ ) {
+    return(0);
+  }
+  return($size);
 }
 
 sub transfer() {
@@ -283,6 +330,7 @@ sub transfer() {
   my($src) = $self->config("src");
   my($dst) = $self->config("dst");
   my($sum) = $self->config("sum");
+  my($maxtransfer) = $self->config("maxtransfer");
 
   unless ($src =~ m#^([\/\w.-]+)$#) {                  # $1 is untainted
       die "filename '$src' has invalid characters.\n";
@@ -299,14 +347,35 @@ sub transfer() {
   chdir($src) or die "chdir($src): $!\n";
 
   my($srcext);
+  my($totsize) = 0;
   foreach $srcext ( <*.$ext> ) {
     print "srcext: $srcext\n";
     my(@srcext) = $self->checksum($srcext);
     chdir($cwd) or die "chdir($cwd): $!\n";
-    foreach ( @srcext ) {
-      $self->mover($_);
+    foreach ( @srcext, $srcext ) {
+      my($size) = 0;
+
+
+
+      my($retries) = 3;
+      while ( $retries-- ) {
+        $size = $self->mover($_);
+        last if ( $size );
+        print "Retrying($retries) transfer of $_, sleeping\n";
+        sleep(5);
+      }
+
+      $totsize += $size;
+      print "totsize: $totsize\n";
+
+      #if ( $totsize > $maxtransfer ) {
+      if ( $totsize > 1000 ) {
+        $self->wait_until_transfered($_);
+        $totsize = 0;
+      }
+
     }
-    $self->mover($srcext);
+    #$self->mover($srcext);
     chdir($src) or die "chdir($src): $!\n";
   }
 }
