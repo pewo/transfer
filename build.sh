@@ -5,5 +5,11 @@ ASC="19700101235959.asc"
 FILES="build.sh LICENSE README.md"
 
 sha256sum $FILES  > /tmp/$ASC
+if [ ! -d diod/src ]; then
+	mkdir -p diod/src
+fi
+if [ ! -d diod/dst ]; then
+	mkdir -p diod/dst
+fi
 cp $FILES diod/src
 cp /tmp/$ASC diod/src
