@@ -73,7 +73,11 @@ sub new {
                    $debug = $val;
                 }
         }
-        delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};
+        my($conf) = $self->get("conf");
+        croak "new needs parameter 'conf'" unless ( defined($conf) );
+        croak "Unable to get lock on $conf" unless ( $self->lock($conf) );
+        croak "Something wrong in $conf" unless ( $self->readconf($conf) );
+
         return($self);
 }
 
@@ -175,23 +179,25 @@ sub validateconf() {
   my($src) = $self->config("src");
   $rc = $self->checkdir($src);
   unless ( $rc ) {
+    print "config is missing src key\n";
     return(undef);
   }
   my($dst) = $self->config("dst");
   $rc = $self->checkdir($dst);
   unless ( $rc ) {
+    print "config is missing dst key\n";
     return(undef);
   }
 
   my($ext) = $self->config("ext");
   unless ( defined($ext) ) {
-    print "Missing ext in config\n";
+    print "config is missing ext key\n";
     return(undef);
   }
 
   my($sum) = $self->config("sum");
   unless ( defined($sum) ) {
-    print "Missing sum in config\n";
+    print "config is missing sum key\n";
     return(undef);
   }
   my($bin) = undef;
@@ -393,7 +399,7 @@ sub lock() {
     print "Can't get lock on $file\n";
     return(undef);
   }
-  return(0);
+  return(1);
 }
 
 1;
