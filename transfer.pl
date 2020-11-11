@@ -20,6 +20,7 @@ GetOptions (
 print "conf: $conf\n" if ( $debug );
 
 my($transfer) = new Transfer( debug => $debug );
+die unless ( $transfer->lock($0) );
 my($rc) = $transfer->readconf($conf);
 unless ( $rc ) {
   die "Something wrong in $conf\n";

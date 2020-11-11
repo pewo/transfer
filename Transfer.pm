@@ -53,6 +53,7 @@ use Carp;
 use Data::Dumper;
 use File::Copy;
 use Cwd;
+use Fcntl qw(:flock);
 
 
 my($debug) = 0;
@@ -379,5 +380,21 @@ sub transfer() {
     chdir($src) or die "chdir($src): $!\n";
   }
 }
+
+sub lock() {
+  my($self) = shift;
+  my($file) = shift;
+  
+  unless ( open(LOCK,"<",$file) ) {
+    print "Reading $file: $!\n";
+    return(undef);
+  }
+  unless ( flock(LOCK,LOCK_EX|LOCK_NB) ) {
+    print "Can't get lock on $file\n";
+    return(undef);
+  }
+  return(0);
+}
+
 1;
 
