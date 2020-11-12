@@ -336,15 +336,15 @@ sub wait_until_transfered() {
     }
     $dstfile = $1;
     my ($start) = time;
-    my ($i)     = 1;
+    my ($sleep) = 10;
+    my ($i)     = 0;
     while (1) {
         last unless ( -r $dstfile );
-        $i++;
-        print "Wating($i) for $dstfile to be transfered Started:"
+        print "Waited $i(s) for $dstfile to be transfered. Started:"
           . localtime($start)
           . ", Now: "
           . localtime(time) . "\n";
-        sleep(10);
+        $i += sleep($sleep);
     }
     return ($i);
 }
@@ -385,16 +385,14 @@ sub mover() {
 
     my ($rc) = 0;
     $rc = move( $srcfile, $dstfile );
-    print "move($srcfile,$dstfile) = $rc";
-    unless ($rc) {
-        print " (error: $!)\n";
+    if ($rc) {
+        print "move($srcfile,$dstfile) OK\n";
+    }
+    else {
+        print "move($srcfile,$dstfile) error: $!\n";
         return (undef);
     }
-    print "\n";
 
-    #if ( $dstfile =~ /README/ ) {
-    #    return (0);
-    #}
     return ($size);
 }
 
@@ -402,7 +400,7 @@ sub prepare() {
     my ($self)   = shift;
     my ($srcext) = shift;
 
-    print "preparing from $srcext\n";
+    print "preparing from $srcext\n" if ($debug);
     unless ( open( IN, "<", $srcext ) ) {
         print "Reading $srcext: $!\n";
         return (undef);
@@ -415,12 +413,11 @@ sub prepare() {
         }
         next unless ($file);
         if ( -r $file ) {
-            print "File $file exists\n";
+            print "File $file exists\n" if ($debug);
             next;
         }
 
-        print "File $file is missing\n";
-
+        print "File $file is missing, trying to rebuild\n";
         unlink($file);
 
         my ($src);
@@ -429,27 +426,29 @@ sub prepare() {
                 die "filename '$src' has invalid characters.\n";
             }
             $src = $1;
-            print "src: $src\n";
             my ($catbin) = $self->config("catbin");
             delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
 
-            my($rc) = system("$catbin $src >> $file");
-            unless ( $rc ) { 
+            my ($rc) = system("$catbin $src >> $file");
+            unless ($rc) {
                 print "Adding $src to $file OK\n";
                 unless ( unlink($src) ) {
                     print "Unlinking $src failed: $!\n";
-                    return(undef);
+                    return (undef);
+                }
+                else {
+                    print "Unlinked $src OK\n";
                 }
             }
             else {
                 print "Adding $src to $file failed: $!\n";
-                return(undef);
+                return (undef);
             }
         }
 
     }
     close(IN);
-    return(1);
+    return (1);
 }
 
 sub transfer() {
@@ -461,17 +460,6 @@ sub transfer() {
     my ($maxtransfer) = $self->config("maxtransfer");
     my ($low)         = $self->config("low");
     my ($high)        = undef;
-
-    unless ( defined($low) ) {
-        $low  = 0;
-        $high = 1;
-        print "Starting transfer on high side\n";
-    }
-    else {
-        $low  = 1;
-        $high = 0;
-        print "Starting transfer on low side\n";
-    }
 
     unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
         die "filename '$src' has invalid characters.\n";
@@ -489,7 +477,27 @@ sub transfer() {
 
     my ($srcext);
     my ($totsize) = 0;
+    my (@srcext)  = ();
+    my ($files)   = 0;
     foreach $srcext (<*.$ext>) {
+        $files++;
+        push( @srcext, $srcext );
+    }
+
+    if ($files) {
+        unless ( defined($low) ) {
+            $low  = 0;
+            $high = 1;
+            print "Starting transfer on high side\n";
+        }
+        else {
+            $low  = 1;
+            $high = 0;
+            print "Starting transfer on low side\n";
+        }
+    }
+
+    foreach $srcext (@srcext) {
         print "processing $srcext\n";
         if ($high) {
             unless ( $self->prepare($srcext) ) {
@@ -522,7 +530,8 @@ sub transfer() {
             }
 
             $totsize += $size;
-            print "totsize: $totsize\n";
+
+            #print "totsize: $totsize\n" if ( $debug );
 
             if ($low) {
 
@@ -578,7 +587,8 @@ sub splitter() {
     }
 
     unless ( $size > $splitbytes ) {
-        print "No need too split $srcfile $size is less then $splitbytes\n";
+        print "No need too split $srcfile $size is less then $splitbytes\n"
+          if ($debug);
         return (0);
     }
 
