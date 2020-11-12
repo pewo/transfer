@@ -5,11 +5,6 @@ sum=sha256sum
 maxtransfer=10000000
 splitbytes=1000000
 # Low
-#src=diod/src
-#dst=diod/trans
-#low=true
-# High
-src=diod/dst
-dst=diod/high
-high=true
-
+src=diod/low/src
+dst=diod/low/trans
+low=true

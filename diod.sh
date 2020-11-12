@@ -1,4 +1,4 @@
 #!/bin/sh
 
-ls diod/trans
-mv diod/trans/* diod/dst
+ls diod/low/trans
+mv diod/low/trans/* diod/high/trans

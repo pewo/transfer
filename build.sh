@@ -4,26 +4,25 @@
 ASC="19700101235959.asc"
 FILES="build.sh LICENSE README.md"
 
-if [ ! -d diod/high ]; then
-	mkdir -p diod/high
+if [ ! -d diod/high/trans ]; then
+	mkdir -p diod/high/trans
 fi
-if [ ! -d diod/src ]; then
-	mkdir -p diod/src
+if [ ! -d diod/high/dst ]; then
+	mkdir -p diod/high/dst
 fi
-if [ ! -d diod/trans ]; then
-	mkdir -p diod/trans
+if [ ! -d diod/low/src ]; then
+	mkdir -p diod/low/src
 fi
-if [ ! -d diod/dst ]; then
-	mkdir -p diod/dst
+if [ ! -d diod/low/trans ]; then
+	mkdir -p diod/low/trans
 fi
 
-rm diod/dst/*
-rm diod/src/*
-rm diod/trans/*
+rm diod/low/*/*
+rm diod/high/*/*
 
-cp $FILES diod/src
-truncate --size=1M diod/src/bigfile
-rm -f diod/src/$ASC
-(cd diod/src; sha256sum *  > /tmp/$ASC)
+cp $FILES diod/low/src
+truncate --size=1M diod/low/src/bigfile
+rm -f diod/low/src/$ASC
+(cd diod/low/src; sha256sum *  > /tmp/$ASC)
 
-cp /tmp/$ASC diod/src
+cp /tmp/$ASC diod/low/src
