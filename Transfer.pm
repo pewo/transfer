@@ -376,6 +376,49 @@ sub mover() {
     return ($size);
 }
 
+sub prepare() { 
+   my($self) = shift;
+   my($srcext) = shift;
+
+   unless ( open(IN,"<",$srcext) ) {
+      print "Reading $srcext: $!\n";
+      return(undef);
+   }
+   foreach ( <IN> ) {
+      chomp;
+      my($file) = undef;
+      if ( m/^\w+\s+(\w+.*)$/ ) {
+         $file = $1;
+      }
+      next unless ( $file );
+      if ( -r $file ) {
+         print "File $file exists\n";
+         next;
+      }
+
+      print "File $file is missing\n";
+      unlink($file);
+      unless ( open(OUT,">",$file) ) {
+         print "Writing $file: $!\n";
+         next;
+      }
+      my($src);
+      foreach $src ( <$file.part.*> ) {
+         print "src: $src\n";
+         unless ( open(SRC,"<",$src) ) {
+            print "Reading $src: $!\n";
+            next;
+         }
+         foreach ( <SRC> ) {
+            print OUT $_;
+         }
+         close(SRC);
+      }
+      close(OUT);
+   }
+   close(IN);
+}
+
 sub transfer() {
     my ($self)        = shift;
     my ($ext)         = $self->config("ext");
@@ -415,6 +458,14 @@ sub transfer() {
     my ($totsize) = 0;
     foreach $srcext (<*.$ext>) {
         print "processing $srcext\n";
+        if ( $high ) {
+           unless ( $self->prepare($srcext) ) {
+              print "Problem when preparing $srcext, skipping\n";
+              next;
+           }
+        }
+        print "debug exit\n";
+        exit;
         my (@srcext) = $self->checksum($srcext);
         chdir($cwd) or die "chdir($cwd): $!\n";
         my ($srcfile);
@@ -457,6 +508,9 @@ sub transfer() {
         }
 
         $self->mover($srcext,1);
+        if ( $low ) {
+            $self->wait_until_transfered($srcext);
+        }
         chdir($src) or die "chdir($src): $!\n";
     }
 }

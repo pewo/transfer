@@ -4,6 +4,9 @@
 ASC="19700101235959.asc"
 FILES="build.sh LICENSE README.md"
 
+if [ ! -d diod/high ]; then
+	mkdir -p diod/high
+fi
 if [ ! -d diod/src ]; then
 	mkdir -p diod/src
 fi
