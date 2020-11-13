@@ -54,6 +54,7 @@ use File::Copy;
 use File::Basename;
 use Cwd;
 use Fcntl qw(:flock);
+use Sys::Hostname;
 
 my ($debug) = 0;
 $Transfer::VERSION = '0.01';
@@ -380,7 +381,7 @@ sub mover() {
     unless ( defined($nosplit) ) {
         my ($split) = 0;
         $split = $self->splitter($srcfile);
-        return (1) if ($split);
+        return ($size) if ($split);
     }
 
     my ($rc) = 0;
@@ -496,6 +497,7 @@ sub transfer() {
             print "Starting transfer on low side\n";
         }
     }
+    my($start) = time;
 
     foreach $srcext (@srcext) {
         print "processing $srcext\n";
@@ -509,8 +511,14 @@ sub transfer() {
         chdir($cwd) or die "chdir($cwd): $!\n";
         my ($srcfile);
         my ($lastsrcfile) = undef;
+        my ($sent) = 0;
+        $files = 0;
+        my(%fileinfo) = ();
         foreach $srcfile (@srcext) {
+            $files++;
             my ($size) = 0;
+
+            $fileinfo{$srcfile}=0;
 
             my ($retries) = 3;
             while ( $retries-- ) {
@@ -530,12 +538,12 @@ sub transfer() {
             }
 
             $totsize += $size;
+            $sent += $size;
+            $fileinfo{$srcfile}=$size;
 
             #print "totsize: $totsize\n" if ( $debug );
 
             if ($low) {
-
-                #if ( $totsize > 1000 ) {
                 if ( $totsize > $maxtransfer ) {
                     $self->wait_until_transfered($srcfile);
                     $totsize = 0;
@@ -543,9 +551,43 @@ sub transfer() {
                 $lastsrcfile = $srcfile;
             }
         }
-        if ($low) {
+
+        if ( $low && $lastsrcfile ) {
             print "last srcfile is $lastsrcfile\n";
             $self->wait_until_transfered($lastsrcfile);
+        }
+
+        my($end) = time;
+        my($stats) = $src . "/" . $srcext . ".stats";
+        #
+        # Tainting $sumbin
+        #
+        unless ( $stats =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+            die "filename '$stats' has invalid characters.\n";
+        }
+        $stats = $1;
+        if ( open(STATS,">>",$stats) ) {
+           my($dur) = $end - $start;
+           my($i) = 0;
+           my($pre) = "";
+           if ( $low ) {
+               $pre = "low";
+           }
+           else {
+              $pre = "high";
+           }
+           print STATS $pre . "start=$start\n";
+           print STATS $pre . "end=$end\n";
+           print STATS $pre . "dur=$dur\n";
+           print STATS $pre . "files=$files\n";
+           print STATS $pre . "sent=$sent\n";
+           print STATS $pre . "srv=" . hostname . "\n";
+           print STATS $pre . "ver=$Transfer::VERSION\n";
+           foreach ( sort keys %fileinfo ) {
+              print STATS $pre . "file" . $i++ . "=" . $_ . "($fileinfo{$_})\n";
+           }
+           close(STATS); 
+           $self->mover( basename($stats), 1 );
         }
 
         $self->mover( $srcext, 1 );
@@ -553,6 +595,7 @@ sub transfer() {
             $self->wait_until_transfered($srcext);
         }
         chdir($src) or die "chdir($src): $!\n";
+
     }
 }
 
