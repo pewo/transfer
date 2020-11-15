@@ -14,6 +14,7 @@ my $help = undef;
 
 GetOptions(
     "conf=s"  => \$conf,
+    "debug=i" => \$debug,
     "verbose" => \$verbose,
     "help" => \$help,
 ) or die("Error in command line arguments\n");

@@ -66,6 +66,13 @@ sub new {
     my $self  = {};
     bless( $self, $class );
 
+    my(%default_config) = (
+        "ext" => "asc",
+        "sum" => "sha256sum",
+        "maxtransfer" => 10000000,
+        "splitbytes" => 1000000,
+    );
+
     $self->set("debug",0);
 
     my (%hash) = (@_);
@@ -75,9 +82,14 @@ sub new {
     }
     while ( my ( $key, $val ) = each(%hash) ) {
         $self->set( $key, $val );
-        $self->debug(5,"Initiating [$key] to [$val]");
+        $self->debug(5,"initiating [$key] to [$val]");
     }
     my ($conf) = $self->get("conf");
+
+    foreach ( keys %default_config ) {
+        $self->config($_,$default_config{$_});
+        $self->debug(9,"setting default config value $_ = $default_config{$_}");
+    }
     croak "new needs parameter 'conf'"  unless ( defined($conf) );
     croak "Unable to get lock on $conf" unless ( $self->lock($conf) );
     croak "Something wrong in $conf"    unless ( $self->readconf($conf) );
@@ -118,6 +130,7 @@ sub readconf() {
         return (undef);
     }
 
+    $self->debug(5,"reading configuration file $conf");
     my (@content) = $self->readfile($conf);
 
     foreach (@content) {
@@ -128,26 +141,26 @@ sub readconf() {
         s/\s+$//;
         next if ( $_ =~ /^$/ );
         my ( $key, $value ) = split( /\s*=\s*/, $_ );
-        $self->debug(5,"key=[$key], value=[$value]");
+        $self->debug(5,"configuration: key=[$key], value=[$value]");
         next unless ( defined($key) );
         next unless ( defined($value) );
         $self->config( $key, $value );
-
-        #$res{$key}=$value;
     }
 
     return ( $self->validateconf() );
-
-    #return(%res);
 
 }
 
 sub checkdir() {
     my ($self) = shift;
     my ($dir)  = shift;
+
     unless ( defined($dir) ) {
         return (undef);
     }
+
+    $self->debug(9,"check if $dir is valid and a directory");
+
     unless ( $dir =~ /^[\/\w]+$/ ) {
         print "$dir contains bad characters\n";
         return (undef);
@@ -179,13 +192,13 @@ sub validateconf() {
     my (%conf) = @_;
 
     my ($rc);
-
     my ($src) = $self->config("src");
     $rc = $self->checkdir($src);
     unless ($rc) {
         print "config is missing src key or value is not a directory\n";
         return (undef);
     }
+    $self->debug(5,"checked src($src) directory");
 
     my ($dst) = $self->config("dst");
     $rc = $self->checkdir($dst);
@@ -193,18 +206,21 @@ sub validateconf() {
         print "config is missing dst key or value is not a directory\n";
         return (undef);
     }
+    $self->debug(5,"checked dst($dst) directory");
 
     my ($ext) = $self->config("ext");
     unless ( defined($ext) ) {
         print "config is missing ext key\n";
         return (undef);
     }
+    $self->debug(5,"checked ext($ext) key");
 
     my ($sum) = $self->config("sum");
     unless ( defined($sum) ) {
         print "config is missing sum key\n";
         return (undef);
     }
+    $self->debug(5,"checked sum($sum) key");
     my ($sumbin) = undef;
     if ( $sum =~ /^\w+$/ ) {
         if ( -x "/usr/bin/$sum" ) {
@@ -222,6 +238,7 @@ sub validateconf() {
         print "Missing executable $sum\n";
         return (undef);
     }
+    $self->debug(5,"setting sumbin to $sumbin");
 
     my ($splitbin) = undef;
     if ( -x "/usr/bin/split" ) {
@@ -237,6 +254,7 @@ sub validateconf() {
         print "Missing executable split\n";
         return (undef);
     }
+    $self->debug(5,"setting splitbin to $splitbin");
 
     my ($catbin) = undef;
     if ( -x "/usr/bin/cat" ) {
@@ -260,27 +278,32 @@ sub validateconf() {
         print "Missing executable cat\n";
         return (undef);
     }
+    $self->debug(5,"setting catbin to $catbin");
 
     my ($maxtransfer) = $self->config("maxtransfer");
     unless ($maxtransfer) {
         $maxtransfer = 2 * 1000 * 1000 * 1000;    # 2 GB
         $self->config( "maxtransfer", $maxtransfer );
+        $self->debug(5,"setting maxtransfer to $maxtransfer");
     }
 
     my ($splitbytes) = $self->config("splitbytes");
     unless ($splitbytes) {
         $splitbytes = 512 * 1000 * 1000;          # 512 MB
         $self->config( "splitbytes", $splitbytes );
+        $self->debug(5,"setting splitbytes to $splitbytes");
     }
 
     my ($low) = $self->config("low");
     if ( defined($low) ) {
         $self->config( "low", 1 ) if ($low);
+        $self->debug(5,"this is low side");
     }
 
     my ($high) = $self->config("high");
     if ( defined($high) ) {
         $self->config( "high", 1 ) if ($high);
+        $self->debug(5,"this is high side");
     }
 
     unless ( $self->config("low") or $self->config("high") ) {
@@ -315,13 +338,16 @@ sub checksum() {
     }
     $sumbin = $1;
 
+    $self->debug(5,"executing $sumbin --check --ignore-missing $srcext" );
     open( my $listing, "-|", $sumbin, "--check", "--ignore-missing", $srcext )
       or croak "error executing command: stopped";
     while (<$listing>) {
         next unless ( defined($_) );
         chomp;
+        $self->debug(9,"$srcext: $_");
         if ( $_ =~ /:\s+OK/ ) {
             $_ =~ s/:\s+OK.*//;
+            $self->debug(9,"adding $_ to valid files");
             push( @res, $_ );
         }
     }
@@ -344,11 +370,11 @@ sub wait_until_transfered() {
     my ($i)     = 0;
     while (1) {
         last unless ( -r $dstfile );
+        $i += sleep($sleep);
         print "Waited $i(s) for $dstfile to be transfered. Started:"
           . localtime($start)
           . ", Now: "
           . localtime(time) . "\n";
-        $i += sleep($sleep);
     }
     return ($i);
 }
@@ -372,6 +398,8 @@ sub mover() {
     }
     $dstfile = $1;
 
+    $self->debug(5,"trying to move $srcfile to $dstfile");
+
     my (
         $dev,  $ino,   $mode,  $nlink, $uid,     $gid, $rdev,
         $size, $atime, $mtime, $ctime, $blksize, $blocks
@@ -380,8 +408,13 @@ sub mover() {
         print "unable to stat $srcfile: $!\n";
         return (undef);
     }
+    $self->debug(5,"filesize is $size");
 
-    unless ( defined($nosplit) ) {
+    if ( defined($nosplit) ) {
+        $self->debug("will not split file");
+    }
+    else {
+        $self->debug("trying to split file");
         my ($split) = 0;
         $split = $self->splitter($srcfile);
         return ($size) if ($split);
@@ -404,7 +437,7 @@ sub prepare() {
     my ($self)   = shift;
     my ($srcext) = shift;
 
-    print "preparing from $srcext\n" if ($debug);
+    $self->debug(5,"preparing from $srcext");
     unless ( open( IN, "<", $srcext ) ) {
         print "Reading $srcext: $!\n";
         return (undef);
@@ -416,6 +449,7 @@ sub prepare() {
             $file = $1;
         }
         next unless ($file);
+        $self->debug(5,"file is $file");
         if ( -r $file ) {
             print "File $file exists\n" if ($debug);
             next;
@@ -430,6 +464,7 @@ sub prepare() {
                 die "filename '$src' has invalid characters.\n";
             }
             $src = $1;
+            $self->debug(9,"adding $src to valid files");
             my ($catbin) = $self->config("catbin");
             delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
 
@@ -469,12 +504,14 @@ sub transfer() {
         die "filename '$src' has invalid characters.\n";
     }
     $src = $1;
+    $self->debug(5,"src directory is $src");
 
     my $cwd = getcwd;
     unless ( $cwd =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
         die "filename '$cwd' has invalid characters.\n";
     }
     $cwd = $1;
+    $self->debug(5,"cwd is $cwd");
     $self->config( "cwd", $cwd );
     chdir($cwd) or die "chdir($cwd): $!\n";
     chdir($src) or die "chdir($src): $!\n";
@@ -486,6 +523,7 @@ sub transfer() {
     foreach $srcext (<*.$ext>) {
         $files++;
         push( @srcext, $srcext );
+        $self->debug(5,"adding file $files, $srcext to list of valid files");
     }
 
     if ($files) {
@@ -500,9 +538,11 @@ sub transfer() {
             print "Starting transfer on low side\n";
         }
     }
-    my($start) = time;
 
     foreach $srcext (@srcext) {
+        my($start) = time;
+        $self->debug(9,"starting time is $start " . localtime(time));
+
         print "processing $srcext\n";
         if ($high) {
             unless ( $self->prepare($srcext) ) {
@@ -511,6 +551,7 @@ sub transfer() {
             }
         }
         my (@srcext) = $self->checksum($srcext);
+        $self->debug(9,"chdir($cwd)");
         chdir($cwd) or die "chdir($cwd): $!\n";
         my ($srcfile);
         my ($lastsrcfile) = undef;
@@ -519,6 +560,7 @@ sub transfer() {
         my(%fileinfo) = ();
         foreach $srcfile (@srcext) {
             $files++;
+            $self->debug(5,"processing file $files, $srcfile");
             my ($size) = 0;
 
             $fileinfo{$srcfile}=0;
@@ -570,6 +612,7 @@ sub transfer() {
         }
         $stats = $1;
         if ( open(STATS,">>",$stats) ) {
+            $self->debug(5,"creating statistics file $stats");
            my($dur) = $end - $start;
            my($i) = 0;
            my($pre) = "";
@@ -590,6 +633,7 @@ sub transfer() {
               print STATS $pre . "file" . $i++ . "=" . $_ . "($fileinfo{$_})\n";
            }
            close(STATS); 
+           $self->debug(9,"moving $stats");
            $self->mover( basename($stats), 1 );
         }
 
@@ -598,7 +642,8 @@ sub transfer() {
             $self->wait_until_transfered($srcext);
         }
         chdir($src) or die "chdir($src): $!\n";
-
+        $self->debug(5,"chdir($src)");
+        $self->debug(9,"ending time is $end " . localtime($end));
     }
 }
 
@@ -633,8 +678,7 @@ sub splitter() {
     }
 
     unless ( $size > $splitbytes ) {
-        print "No need too split $srcfile $size is less then $splitbytes\n"
-          if ($debug);
+        $self->debug(5,"No need too split $srcfile $size is less then $splitbytes");
         return (0);
     }
 
@@ -661,14 +705,14 @@ sub splitter() {
         "--numeric-suffixes", "$srcfile",          "$srcfile.part."
     ) or croak "error executing command: stopped";
     while (<$listing>) {
-        print "SPLIT: $_";
+        $self->debug(9,"split: $_");
     }
     close($listing);
 
     my ($splitpath);
     foreach $splitpath (<$srcfile.part.*>) {
         my ($splitfile) = basename($splitpath);
-        print "splitfile: $splitfile\n";
+        $self->debug(9,"splitfile: $splitfile");
         $self->mover( $splitfile, 1 );
         $self->wait_until_transfered($splitfile);
     }
