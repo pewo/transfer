@@ -2,7 +2,7 @@
 
 use strict;
 use Data::Dumper;
-my ($debug) = 9;
+my ($debug) = 0;
 
 use lib ".";
 use Transfer;
@@ -25,9 +25,10 @@ if ( $help ) {
 }
 print "conf: $conf\n" if ($debug);
 
-my ($transfer) = new Transfer( debug => $debug, conf => $conf );
-die "Unable to create Transfer object" unless ($transfer);
+new Transfer( debug => $debug, conf => $conf )->transfer();
+#my ($transfer) = new Transfer( debug => $debug, conf => $conf );
+#die "Unable to create Transfer object" unless ($transfer);
 
 #print Dumper( \$transfer );
 
-$transfer->transfer();
+#$transfer->transfer();

@@ -14,6 +14,7 @@ sub set($$$) {
     $what =~ tr/a-z/A-Z/;
 
     $self->{$what} = $value;
+    $self->debug(9,"setting $what to $value");
     return ($value);
 }
 
@@ -23,6 +24,7 @@ sub get($$) {
 
     $what =~ tr/a-z/A-Z/;
     my $value = $self->{$what};
+    #$self->debug(9,"returning $value for $what");
 
     return ( $self->{$what} );
 }
@@ -62,7 +64,13 @@ my ($debug) = 0;
 $Transfer::VERSION = '0.01';
 @Transfer::ISA     = qw(Object);
 
-
+####################################
+# new(@_)
+# Creates a new Transfer object
+# Valid parameters are
+#   debug => 0-9
+#   conf => configuration filename
+####################################
 sub new {
     my $proto = shift;
     my $class = ref($proto) || $proto;
@@ -95,12 +103,19 @@ sub new {
         $self->debug(9,"setting default config value $_ = $default_config{$_}");
     }
     croak "new needs parameter 'conf'"  unless ( defined($conf) );
+    $self->debug(9,"trying to lock $conf");
     croak "Unable to get lock on $conf" unless ( $self->lock($conf) );
+    $self->debug(9,"trying to read $conf");
     croak "Something wrong in $conf"    unless ( $self->readconf($conf) );
 
+    $self->debug(9,"returning new object $self");
     return ($self);
 }
 
+####################################
+# readfile($filename)
+# Reads file and return as an array
+####################################
 sub readfile() {
     my ($self) = shift;
     my ($file) = shift;
@@ -115,13 +130,17 @@ sub readfile() {
     return (@res);
 }
 
+####################################
+# readconf($conf)
+# Import configuration parameters
+####################################
 sub readconf() {
     my ($self) = shift;
     my ($conf) = shift;
     my (%res)  = ();
 
     unless ( defined($conf) ) {
-        print "readconf need \$conf parameter\n";
+        $self->debug(0,"readconf need \$conf parameter");
         return (undef);
     }
 
@@ -141,11 +160,14 @@ sub readconf() {
         next unless ( defined($value) );
         $self->config( $key, $value );
     }
-
     return ( $self->validateconf() );
-
 }
 
+####################################
+# checkdir($dir)
+# Checks if $dir contains valid charactes
+# and is an existing directory
+####################################
 sub checkdir() {
     my ($self) = shift;
     my ($dir)  = shift;
@@ -157,14 +179,15 @@ sub checkdir() {
     $self->debug(9,"check if $dir is valid and a directory");
 
     unless ( $dir =~ /^[\/\w]+$/ ) {
-        print "$dir contains bad characters\n";
+        $self->debug(0,"$dir contains bad characters");
         return (undef);
     }
     if ( !-d $dir ) {
-        print "$dir is not a directory\n";
+        $self->debug(0,"$dir is not a directory");
         return (undef);
     }
     else {
+        $self->debug(9,"$dir is OK");
         return ($dir);
     }
 }
@@ -190,7 +213,7 @@ sub validateconf() {
     my ($src) = $self->config("src");
     $rc = $self->checkdir($src);
     unless ($rc) {
-        print "config is missing src key or value is not a directory\n";
+        $self->debug(0,"config is missing src key or value is not a directory");
         return (undef);
     }
     $self->debug(5,"checked src($src) directory");
@@ -198,21 +221,21 @@ sub validateconf() {
     my ($dst) = $self->config("dst");
     $rc = $self->checkdir($dst);
     unless ($rc) {
-        print "config is missing dst key or value is not a directory\n";
+        $self->debug(0,"config is missing dst key or value is not a directory");
         return (undef);
     }
     $self->debug(5,"checked dst($dst) directory");
 
     my ($ext) = $self->config("ext");
     unless ( defined($ext) ) {
-        print "config is missing ext key\n";
+        $self->debug(0,"config is missing ext key");
         return (undef);
     }
     $self->debug(5,"checked ext($ext) key");
 
     my ($sum) = $self->config("sum");
     unless ( defined($sum) ) {
-        print "config is missing sum key\n";
+        $self->debug(0,"config is missing sum key");
         return (undef);
     }
     $self->debug(5,"checked sum($sum) key");
@@ -230,7 +253,7 @@ sub validateconf() {
         $self->config( "sumbin", $sumbin );
     }
     else {
-        print "Missing executable $sum\n";
+        $self->debug(0,"Missing executable $sum");
         return (undef);
     }
     $self->debug(5,"setting sumbin to $sumbin");
@@ -246,7 +269,7 @@ sub validateconf() {
         $self->config( "splitbin", $splitbin );
     }
     else {
-        print "Missing executable split\n";
+        $self->debug(0,"Missing executable split");
         return (undef);
     }
     $self->debug(5,"setting splitbin to $splitbin");
@@ -270,7 +293,7 @@ sub validateconf() {
         $self->config( "catbin", $catbin );
     }
     else {
-        print "Missing executable cat\n";
+        $self->debug(0,"Missing executable cat");
         return (undef);
     }
     $self->debug(5,"setting catbin to $catbin");
@@ -302,7 +325,7 @@ sub validateconf() {
     }
 
     unless ( $self->config("low") or $self->config("high") ) {
-        print "config is missing low or high keyy\n";
+        $self->debug(0,"config is missing low or high key");
         return (undef);
     }
 
@@ -366,10 +389,11 @@ sub wait_until_transfered() {
     while (1) {
         last unless ( -r $dstfile );
         $i += sleep($sleep);
-        print "Waited $i(s) for $dstfile to be transfered. Started:"
+        $self->debug(0,"Waited $i(s) for $dstfile to be transfered. Started:"
           . localtime($start)
           . ", Now: "
-          . localtime(time) . "\n";
+          . localtime(time)
+        );
     }
     return ($i);
 }
@@ -400,32 +424,29 @@ sub mover() {
         $size, $atime, $mtime, $ctime, $blksize, $blocks
     ) = stat($srcfile);
     unless ( defined($size) ) {
-        print "unable to stat $srcfile: $!\n";
+        $self->debug(0, "unable to stat $srcfile: $!");
         return (undef);
     }
-    $self->debug(5,"filesize is $size");
+    $self->debug(5,"$srcfile size is $size");
     my($splitbytes) = $self->config("splitbytes");
     $self->debug(5,"splitbytes is $splitbytes");
 
-    if ( defined($nosplit) ) {
+    if ( defined($nosplit) || $size <= $splitbytes ) {
         $self->debug("will not split file");
     }
     else {
-        #if ( $size > $splitbytes ) {
-        #$self->debug("trying to split file $size is larger then $splitbytes");
-            my ($split) = 0;
-            $split = $self->splitter($srcfile);
-            return ($size) if ($split);
-            #}
+        my ($split) = 0;
+        $split = $self->splitter($srcfile);
+        return ($size) if ($split);
     }
 
     my ($rc) = 0;
     $rc = move( $srcfile, $dstfile );
     if ($rc) {
-        print "move($srcfile,$dstfile) OK\n";
+        $self->debug(0,"move($srcfile,$dstfile) OK");
     }
     else {
-        print "move($srcfile,$dstfile) error: $!\n";
+        $self->debug(0,"move($srcfile,$dstfile) error: $!");
         return (undef);
     }
 
@@ -450,11 +471,11 @@ sub prepare() {
         next unless ($file);
         $self->debug(5,"file is $file");
         if ( -r $file ) {
-            print "File $file exists\n" if ($debug);
+            $self->debug(5,"File $file exists, skipping rebuild");
             next;
         }
 
-        print "File $file is missing, trying to rebuild\n";
+        $self->debug(0, "File $file is missing, trying to rebuild");
         unlink($file);
 
         my ($src);
@@ -469,17 +490,17 @@ sub prepare() {
 
             my ($rc) = system("$catbin $src >> $file");
             unless ($rc) {
-                print "Adding $src to $file OK\n";
+                $self->debug(0, "Adding $src to $file OK");
                 unless ( unlink($src) ) {
-                    print "Unlinking $src failed: $!\n";
+                    $self->debug(0, "Unlinking $src failed: $!");
                     return (undef);
                 }
                 else {
-                    print "Unlinked $src OK\n";
+                    $self->debug(0, "Unlinked $src OK");
                 }
             }
             else {
-                print "Adding $src to $file failed: $!\n";
+                $self->debug(0,"Adding $src to $file failed: $!");
                 return (undef);
             }
         }
@@ -499,6 +520,8 @@ sub transfer() {
     my ($low)         = $self->config("low");
     my ($high)        = undef;
     my ($lastdebug)   = undef;
+
+    my ($sleep) = $self->config("sleep") || 60;
 
     unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
         die "filename '$src' has invalid characters.\n";
@@ -535,16 +558,16 @@ sub transfer() {
         unless ( defined($low) ) {
             $low  = 0;
             $high = 1;
-            print "Starting transfer on high side\n";
+            $self->debug(0,"starting transfer on high side");
         }
         else {
             $low  = 1;
             $high = 0;
-            print "Starting transfer on low side\n";
+            $self->debug(0,"starting transfer on low side");
         }
     }
     else {
-        print "nothing to do, exiting...\n";
+        $self->debug(0,"nothing to do, exiting...");
         exit(0);
     }
 
@@ -555,10 +578,10 @@ sub transfer() {
         my($start) = time;
         $self->debug(9,"starting time is $start " . localtime(time));
 
-        print "processing $srcext\n";
+        $self->debug(5,"processing $srcext");
         if ($high) {
             unless ( $self->prepare($srcext) ) {
-                print "Problem when preparing $srcext, skipping\n";
+                $self->debug(0,"problem when preparing $srcext, skipping");
                 next;
             }
         }
@@ -585,19 +608,17 @@ sub transfer() {
                     $size = $self->mover($srcfile);
                 }
                 last if ($size);
-                print "Retrying($retries) transfer of $srcfile, sleeping\n";
-                sleep(5);
+                $self->debug(0,"retrying($retries) transfer of $srcfile, sleeping $sleep seconds");
+                sleep($sleep);
             }
             unless ( defined($size) ) {
-                print "Skipping $srcfile, to many retries\n";
+                $self->debug(0,"skipping $srcfile, to many retries");
                 next;
             }
 
             $totsize += $size;
             $sent += $size;
             $fileinfo{$srcfile}=$size;
-
-            #print "totsize: $totsize\n" if ( $debug );
 
             if ($low) {
                 if ( $totsize > $maxtransfer ) {
@@ -692,8 +713,8 @@ sub transfer() {
         push(@debugfiles,$lowdebugfile);
         push(@debugfiles,$highdebugfile) if ( $high );
 
-        print "debugfile: $debugfile\n";
-        print "debugname: $debugname\n";
+        $self->debug(9,"debugfile: $debugfile");
+        $self->debug(9,"debugname: $debugname");
         if ( $debugname ) {
             my($fh) = $self->get("debugfh");
             close($fh);
@@ -703,43 +724,6 @@ sub transfer() {
             }
         }
     }
-}
-
-sub concat() {
-    my($self) = shift;
-    my($src) = shift;
-    my($dst) = shift;
-
-    #
-    # Tainting $src and $dst
-    #
-    unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-       die "filename '$src' has invalid characters.\n";
-    }
-    $src = $1;
-
-    unless ( $dst =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-       die "filename '$dst' has invalid characters.\n";
-    }
-    $dst = $1;
-    unless ( open(SRC,"<",$src) ) {
-        print "Reading $src $!\n";
-        return(undef);
-    }
-
-    unless ( open(DST,">>",$dst) ) {
-        print "Writing $dst: $!\n";
-        return(undef);
-    }
-
-    foreach ( <SRC> ) {
-        print DST $_;
-    }
-    close(DST);
-    close(SRC);
-
-    system("/bin/cat $dst");
-    return(1);
 }
 
 sub lock() {
@@ -768,7 +752,7 @@ sub splitter() {
         $size, $atime, $mtime, $ctime, $blksize, $blocks
     ) = stat($srcfile);
     unless ( defined($size) ) {
-        print "unable to stat $srcfile: $!\n";
+        $self->debug(0,"unable to stat $srcfile: $!");
         return (undef);
     }
 
@@ -843,7 +827,10 @@ sub debug() {
             }
         }
 
-        if ( $debug >= $level ) {
+        if ( $level == 0 ) {
+            print $msg . "\n";
+        }
+        elsif ( $debug >= $level ) {
                 print $str . "\n";
                 return($str);
         }
