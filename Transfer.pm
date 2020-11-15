@@ -56,6 +56,7 @@ use File::Temp;
 use Cwd;
 use Fcntl qw(:flock);
 use Sys::Hostname;
+use Scalar::Util qw(openhandle);
 
 my ($debug) = 0;
 $Transfer::VERSION = '0.01';
@@ -497,6 +498,7 @@ sub transfer() {
     my ($maxtransfer) = $self->config("maxtransfer");
     my ($low)         = $self->config("low");
     my ($high)        = undef;
+    my ($lastdebug)   = undef;
 
     unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
         die "filename '$src' has invalid characters.\n";
@@ -521,6 +523,11 @@ sub transfer() {
     foreach $srcext (<*.$ext>) {
         $files++;
         push( @srcext, $srcext );
+        my($tmpdebug) = $srcext . ".low";
+        if ( -r $tmpdebug ) {
+            $lastdebug = $srcext . ".high";
+            $self->debug(9,"setting lastdebug to $lastdebug");
+        }
         $self->debug(5,"adding file $files, $srcext to list of valid files");
     }
 
@@ -650,32 +657,89 @@ sub transfer() {
         $self->debug(9,"ending time is $end " . localtime($end));
     }
 
-    if ( $self->get("debug") > 0 ) {
-        chdir($cwd) or die "chdir($cwd): $!\n";
-        print "cwd: $cwd\n";
-        my($debugfile) = $src . "/" . $lastsrcext . ".debug";
-        #
-        # Tainting $debugfile
-        #
-        unless ( $debugfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-            die "filename '$debugfile' has invalid characters.\n";
-        }
-        $debugfile = $1;
-        print "debugfile: $debugfile\n";
+    if ( $self->get("debug") > 0  || $lastdebug) {
         my($debugname) = $self->get("debugname");
+        chdir($cwd) or die "chdir($cwd): $!\n";
+        $self->debug("cwd: $cwd");
+        my($lowdebugfile) = $src . "/" . $lastsrcext . ".low";
+        my($highdebugfile) = $src . "/";
+        $highdebugfile .= $lastdebug if ( $lastdebug );
+        my($debugfile);
+        my(@debugfiles) = ();
+        
+        #
+        # Tainting $lowdebugfile
+        #
+        unless ( $lowdebugfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+            die "filename '$lowdebugfile' has invalid characters.\n";
+        }
+        $lowdebugfile = $1;
+        #
+        # Tainting $highdebugfile
+        #
+        unless ( $highdebugfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+            die "filename '$highdebugfile' has invalid characters.\n";
+        }
+        $highdebugfile = $1;
+
+        if ( $high ) {
+            $debugfile = $highdebugfile;
+        }
+        else {
+            $debugfile = $lowdebugfile;
+        }
+
+        push(@debugfiles,$lowdebugfile);
+        push(@debugfiles,$highdebugfile) if ( $high );
+
+        print "debugfile: $debugfile\n";
         print "debugname: $debugname\n";
         if ( $debugname ) {
             my($fh) = $self->get("debugfh");
             close($fh);
-            if ( copy($debugname, $debugfile) ) {
-                undef($fh);
-                $self->mover( basename($debugfile), 1 );
-            }
-            else {
-                print "copy($debugname, $debugfile): $!\n";
+            copy($debugname, $debugfile);
+            foreach ( @debugfiles ) {
+                $self->mover( basename($_), 1 );
             }
         }
     }
+}
+
+sub concat() {
+    my($self) = shift;
+    my($src) = shift;
+    my($dst) = shift;
+
+    #
+    # Tainting $src and $dst
+    #
+    unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+       die "filename '$src' has invalid characters.\n";
+    }
+    $src = $1;
+
+    unless ( $dst =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+       die "filename '$dst' has invalid characters.\n";
+    }
+    $dst = $1;
+    unless ( open(SRC,"<",$src) ) {
+        print "Reading $src $!\n";
+        return(undef);
+    }
+
+    unless ( open(DST,">>",$dst) ) {
+        print "Writing $dst: $!\n";
+        return(undef);
+    }
+
+    foreach ( <SRC> ) {
+        print DST $_;
+    }
+    close(DST);
+    close(SRC);
+
+    system("/bin/cat $dst");
+    return(1);
 }
 
 sub lock() {
@@ -773,7 +837,12 @@ sub debug() {
 
         chomp($msg);
         my($str) = "DEBUG($level,$debug,$subroutine1:$line0): $msg";
-        print $fh $str . "\n" if ( $fh );
+        if ( $fh ) {
+            if ( openhandle($fh) ) {
+                print $fh $str . "\n";
+            }
+        }
+
         if ( $debug >= $level ) {
                 print $str . "\n";
                 return($str);
