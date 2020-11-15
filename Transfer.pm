@@ -52,6 +52,7 @@ use Carp;
 use Data::Dumper;
 use File::Copy;
 use File::Basename;
+use File::Temp;
 use Cwd;
 use Fcntl qw(:flock);
 use Sys::Hostname;
@@ -59,6 +60,7 @@ use Sys::Hostname;
 my ($debug) = 0;
 $Transfer::VERSION = '0.01';
 @Transfer::ISA     = qw(Object);
+
 
 sub new {
     my $proto = shift;
@@ -70,7 +72,8 @@ sub new {
         "ext" => "asc",
         "sum" => "sha256sum",
         "maxtransfer" => 10000000,
-        "splitbytes" => 1000000,
+        "splitbytes" => 10000000,
+        "sleep" => 1,
     );
 
     $self->set("debug",0);
@@ -95,15 +98,6 @@ sub new {
     croak "Something wrong in $conf"    unless ( $self->readconf($conf) );
 
     return ($self);
-}
-
-sub trim() {
-    my ($self) = shift;
-    my ($key)  = shift;
-    return (undef) unless ( defined($key) );
-    $key =~ s/^\s+//;
-    $key =~ s/\s+$//;
-    return ($key);
 }
 
 sub readfile() {
@@ -366,7 +360,7 @@ sub wait_until_transfered() {
     }
     $dstfile = $1;
     my ($start) = time;
-    my ($sleep) = 10;
+    my ($sleep) = $self->config("sleep") || 60;
     my ($i)     = 0;
     while (1) {
         last unless ( -r $dstfile );
@@ -409,15 +403,19 @@ sub mover() {
         return (undef);
     }
     $self->debug(5,"filesize is $size");
+    my($splitbytes) = $self->config("splitbytes");
+    $self->debug(5,"splitbytes is $splitbytes");
 
     if ( defined($nosplit) ) {
         $self->debug("will not split file");
     }
     else {
-        $self->debug("trying to split file");
-        my ($split) = 0;
-        $split = $self->splitter($srcfile);
-        return ($size) if ($split);
+        #if ( $size > $splitbytes ) {
+        #$self->debug("trying to split file $size is larger then $splitbytes");
+            my ($split) = 0;
+            $split = $self->splitter($srcfile);
+            return ($size) if ($split);
+            #}
     }
 
     my ($rc) = 0;
@@ -538,8 +536,15 @@ sub transfer() {
             print "Starting transfer on low side\n";
         }
     }
+    else {
+        print "nothing to do, exiting...\n";
+        exit(0);
+    }
 
+    my($lastsrcext) = undef;
+    my ($lastsrcfile) = undef;
     foreach $srcext (@srcext) {
+        $lastsrcext = $srcext;
         my($start) = time;
         $self->debug(9,"starting time is $start " . localtime(time));
 
@@ -554,7 +559,6 @@ sub transfer() {
         $self->debug(9,"chdir($cwd)");
         chdir($cwd) or die "chdir($cwd): $!\n";
         my ($srcfile);
-        my ($lastsrcfile) = undef;
         my ($sent) = 0;
         $files = 0;
         my(%fileinfo) = ();
@@ -598,14 +602,14 @@ sub transfer() {
         }
 
         if ( $low && $lastsrcfile ) {
-            print "last srcfile is $lastsrcfile\n";
+            $self->debug(5,"last srcfile is $lastsrcfile");
             $self->wait_until_transfered($lastsrcfile);
         }
 
         my($end) = time;
         my($stats) = $src . "/" . $srcext . ".stats";
         #
-        # Tainting $sumbin
+        # Tainting $stats
         #
         unless ( $stats =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
             die "filename '$stats' has invalid characters.\n";
@@ -645,6 +649,33 @@ sub transfer() {
         $self->debug(5,"chdir($src)");
         $self->debug(9,"ending time is $end " . localtime($end));
     }
+
+    if ( $self->get("debug") > 0 ) {
+        chdir($cwd) or die "chdir($cwd): $!\n";
+        print "cwd: $cwd\n";
+        my($debugfile) = $src . "/" . $lastsrcext . ".debug";
+        #
+        # Tainting $debugfile
+        #
+        unless ( $debugfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+            die "filename '$debugfile' has invalid characters.\n";
+        }
+        $debugfile = $1;
+        print "debugfile: $debugfile\n";
+        my($debugname) = $self->get("debugname");
+        print "debugname: $debugname\n";
+        if ( $debugname ) {
+            my($fh) = $self->get("debugfh");
+            close($fh);
+            if ( copy($debugname, $debugfile) ) {
+                undef($fh);
+                $self->mover( basename($debugfile), 1 );
+            }
+            else {
+                print "copy($debugname, $debugfile): $!\n";
+            }
+        }
+    }
 }
 
 sub lock() {
@@ -677,7 +708,7 @@ sub splitter() {
         return (undef);
     }
 
-    unless ( $size > $splitbytes ) {
+    if ( $size < $splitbytes ) {
         $self->debug(5,"No need too split $srcfile $size is less then $splitbytes");
         return (0);
     }
@@ -730,13 +761,20 @@ sub debug() {
                 $msg = $level;
                 $level = 1;
         }
+        my($fh) = $self->get("debugfh");
+        unless ( $fh ) {
+            $fh = File::Temp->new();
+            $self->set("debugfh",$fh);
+            $self->set("debugname",$fh->filename);
+        }
         my($debug) = $self->get("debug");
         my ($package0, $filename0, $line0, $subroutine0 ) = caller(0);
         my ($package1, $filename1, $line1, $subroutine1 ) = caller(1);
 
+        chomp($msg);
+        my($str) = "DEBUG($level,$debug,$subroutine1:$line0): $msg";
+        print $fh $str . "\n" if ( $fh );
         if ( $debug >= $level ) {
-                chomp($msg);
-                my($str) = "DEBUG($level,$debug,$subroutine1:$line0): $msg";
                 print $str . "\n";
                 return($str);
         }
