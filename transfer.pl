@@ -2,7 +2,7 @@
 
 use strict;
 use Data::Dumper;
-my ($debug) = 0;
+my ($debug) = 9;
 
 use lib ".";
 use Transfer;

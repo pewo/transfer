@@ -66,12 +66,16 @@ sub new {
     my $self  = {};
     bless( $self, $class );
 
+    $self->set("debug",0);
+
     my (%hash) = (@_);
+    if ( defined($hash{debug}) ) {
+        $debug = $hash{debug};
+        $self->set("debug",$hash{debug});
+    }
     while ( my ( $key, $val ) = each(%hash) ) {
         $self->set( $key, $val );
-        if ( $key =~ /debug/i ) {
-            $debug = $val;
-        }
+        $self->debug(5,"Initiating [$key] to [$val]");
     }
     my ($conf) = $self->get("conf");
     croak "new needs parameter 'conf'"  unless ( defined($conf) );
@@ -124,8 +128,7 @@ sub readconf() {
         s/\s+$//;
         next if ( $_ =~ /^$/ );
         my ( $key, $value ) = split( /\s*=\s*/, $_ );
-        print "key: $key\n"     if ($debug);
-        print "value: $value\n" if ($debug);
+        $self->debug(5,"key=[$key], value=[$value]");
         next unless ( defined($key) );
         next unless ( defined($value) );
         $self->config( $key, $value );
@@ -673,5 +676,29 @@ sub splitter() {
     return (1);
 }
 
+sub debug() {
+        my($self) = shift;
+        my($level) = shift;
+        my($msg) = shift;
+
+        return unless ( defined($level) );
+        unless ( $level =~ /^\d$/ ) {
+                $msg = $level;
+                $level = 1;
+        }
+        my($debug) = $self->get("debug");
+        my ($package0, $filename0, $line0, $subroutine0 ) = caller(0);
+        my ($package1, $filename1, $line1, $subroutine1 ) = caller(1);
+
+        if ( $debug >= $level ) {
+                chomp($msg);
+                my($str) = "DEBUG($level,$debug,$subroutine1:$line0): $msg";
+                print $str . "\n";
+                return($str);
+        }
+        else {
+                return(undef);
+        }
+}
 1;
 
