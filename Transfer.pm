@@ -61,7 +61,7 @@ use Sys::Hostname;
 use Scalar::Util qw(openhandle);
 
 my ($debug) = 0;
-$Transfer::VERSION = '0.01';
+$Transfer::VERSION = '0.1.0';
 @Transfer::ISA     = qw(Object);
 
 ####################################
