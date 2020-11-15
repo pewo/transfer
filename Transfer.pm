@@ -2,9 +2,8 @@ package Object;
 
 use strict;
 use Carp;
-use vars qw($VERSION);
 
-$VERSION = '0.01';
+$Object::VERSION = '0.0.1';
 
 sub set($$$) {
     my ($self)  = shift;
@@ -14,7 +13,9 @@ sub set($$$) {
     $what =~ tr/a-z/A-Z/;
 
     $self->{$what} = $value;
-    $self->debug( 9, "setting $what to $value" );
+    my($val) = "undef";
+    $val = $value if ( defined($value) );
+    $self->debug( 9, "setting $what to $val" );
     return ($value);
 }
 
@@ -24,8 +25,6 @@ sub get($$) {
 
     $what =~ tr/a-z/A-Z/;
     my $value = $self->{$what};
-
-    #$self->debug(9,"returning $value for $what");
 
     return ( $self->{$what} );
 }
@@ -81,12 +80,13 @@ sub new {
     my (%default_config) = (
         "ext"         => "asc",
         "sum"         => "sha256sum",
-        "maxtransfer" => 10000000,
-        "splitbytes"  => 10000000,
+        "maxtransfer" =>  2 * 1000 * 1000 * 1000,
+        "splitbytes"  => 512 * 1000 * 1000,
         "sleep"       => 1,
     );
 
     $self->set( "debug", 0 );
+
 
     my (%hash) = (@_);
     if ( defined( $hash{debug} ) ) {
@@ -110,7 +110,9 @@ sub new {
     $self->debug( 9, "trying to read $conf" );
     croak "Something wrong in $conf" unless ( $self->readconf($conf) );
 
-    $self->debug( 9, "returning new object $self" );
+    $self->set("version",$Transfer::VERSION);
+
+    $self->debug( 9, "returning new object " . Dumper(\$self) );
     return ($self);
 }
 
@@ -463,7 +465,7 @@ sub prepare() {
 
     $self->debug( 5, "preparing from $srcext" );
     unless ( open( IN, "<", $srcext ) ) {
-        print "Reading $srcext: $!\n";
+        $self->debug(0, "Reading $srcext: $!");
         return (undef);
     }
     foreach (<IN>) {
@@ -629,6 +631,7 @@ sub transfer() {
 
             if ($low) {
                 if ( $totsize > $maxtransfer ) {
+                    $self->debug(9,"totsize: $totsize, maxtransfer: $maxtransfer");
                     $self->wait_until_transfered($srcfile);
                     $totsize = 0;
                 }
@@ -673,7 +676,7 @@ sub transfer() {
                 print STATS $pre . "file"
                   . $i++ . "="
                   . $_
-                  . "($fileinfo{$_})\n";
+                  . ",$fileinfo{$_}\n";
             }
             close(STATS);
             $self->debug( 9, "moving $stats" );
@@ -742,11 +745,11 @@ sub lock() {
     my ($file) = shift;
 
     unless ( open( LOCK, "<", $file ) ) {
-        print "Reading $file: $!\n";
+        $self->debug(0, "Reading $file: $!");
         return (undef);
     }
     unless ( flock( LOCK, LOCK_EX | LOCK_NB ) ) {
-        print "Can't get lock on $file\n";
+        $self->debug(0, "Can't get lock on $file");
         return (undef);
     }
     return (1);
@@ -757,6 +760,7 @@ sub splitter() {
     my ($srcfile)    = shift;
     my ($splitbytes) = $self->config("splitbytes");
     my ($splitbin)   = $self->config("splitbin");
+    my ($maxtransfer)= $self->config("maxtransfer");
 
     my (
         $dev,  $ino,   $mode,  $nlink, $uid,     $gid, $rdev,
@@ -801,11 +805,15 @@ sub splitter() {
     close($listing);
 
     my ($splitpath);
+    my($totsize) = 0;
     foreach $splitpath (<$srcfile.part.*>) {
         my ($splitfile) = basename($splitpath);
-        $self->debug( 9, "splitfile: $splitfile" );
-        $self->mover( $splitfile, 1 );
-        $self->wait_until_transfered($splitfile);
+        $totsize += $self->mover( $splitfile, 1 );
+        $self->debug( 9, "splitfile: $splitfile, totsize: $totsize, maxtransfer: $maxtransfer" );
+        if ( $totsize > $maxtransfer ) {
+            $totsize = 0;
+            $self->wait_until_transfered($splitfile);
+        }
     }
     unlink($srcfile);
     return (1);
