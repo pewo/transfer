@@ -64,6 +64,8 @@ my ($debug) = 0;
 $Transfer::VERSION = '0.1.0';
 @Transfer::ISA     = qw(Object);
 
+my ($diodwait) = 0;
+
 ####################################
 # new(@_)
 # Creates a new Transfer object
@@ -254,8 +256,8 @@ sub validateconf() {
             $sumbin = "/bin/$sum";
         }
     }
-
     if ( defined($sumbin) && -x $sumbin ) {
+        $sumbin = $self->taintfilename($sumbin);
         $self->config( "sumbin", $sumbin );
     }
     else {
@@ -272,6 +274,7 @@ sub validateconf() {
         $splitbin = "/bin/split";
     }
     if ( defined($splitbin) && -x $splitbin ) {
+        $splitbin = $self->taintfilename($splitbin);
         $self->config( "splitbin", $splitbin );
     }
     else {
@@ -289,13 +292,7 @@ sub validateconf() {
     }
 
     if ( defined($catbin) && -x $catbin ) {
-        #
-        # Tainting $catbin
-        #
-        unless ( $catbin =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-            die "filename '$catbin' has invalid characters.\n";
-        }
-        $catbin = $1;
+        $catbin = $self->taintfilename($catbin);
         $self->config( "catbin", $catbin );
     }
     else {
@@ -303,6 +300,42 @@ sub validateconf() {
         return (undef);
     }
     $self->debug( 5, "setting catbin to $catbin" );
+
+    my ($zipbin) = undef;
+    if ( -x "/usr/bin/zip" ) {
+        $zipbin = "/usr/bin/zip";
+    }
+    elsif ( -x "/bin/zip" ) {
+        $zipbin = "/bin/zip";
+    }
+
+    if ( defined($zipbin) && -x $zipbin ) {
+        $zipbin = $self->taintfilename($zipbin);
+        $self->config( "zipbin", $zipbin );
+    }
+    else {
+        $self->debug( 0, "Missing executable zip" );
+        return (undef);
+    }
+    $self->debug( 5, "setting zipbin to $zipbin" );
+
+    my ($unzipbin) = undef;
+    if ( -x "/usr/bin/unzip" ) {
+        $unzipbin = "/usr/bin/unzip";
+    }
+    elsif ( -x "/bin/unzip" ) {
+        $unzipbin = "/bin/unzip";
+    }
+
+    if ( defined($unzipbin) && -x $unzipbin ) {
+        $unzipbin = $self->taintfilename($unzipbin);
+        $self->config( "unzipbin", $unzipbin );
+    }
+    else {
+        $self->debug( 0, "Missing executable unzip" );
+        return (undef);
+    }
+    $self->debug( 5, "setting unzipbin to $unzipbin" );
 
     my ($maxtransfer) = $self->config("maxtransfer");
     unless ($maxtransfer) {
@@ -338,7 +371,32 @@ sub validateconf() {
     return (1);
 }
 
-sub checksum() {
+sub create_checksum() {
+    my ($self)   = shift;
+
+    delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
+    my ($sumbin) = $self->config("sumbin");
+
+    my($srcfile);
+    my(@res);
+    foreach $srcfile ( @_ ) {
+
+        $srcfile = $self->taintfilename($srcfile);
+        $self->debug( 5, "executing $sumbin $srcfile" );
+        open( my $listing, "-|", $sumbin, $srcfile )
+          or croak "error executing command: stopped";
+        while (<$listing>) {
+            next unless ( defined($_) );
+            chomp;
+            $self->debug( 9, "$srcfile $_" );
+            push(@res,$_);
+        }
+        close($listing);
+    }
+    return(@res);
+}
+
+sub check_checksum() {
     my ($self)   = shift;
     my ($srcext) = shift;
     my (@cmd)    = @_;
@@ -346,36 +404,34 @@ sub checksum() {
     delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
     my ($sumbin) = $self->config("sumbin");
 
-    #
-    # Tatinting srcext
-    #
-    unless ( $srcext =~ m#^([\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$srcext' has invalid characters.\n";
-    }
-    $srcext = $1;
+    $srcext = $self->taintfilename($srcext);
 
-    #
-    # Tainting $sumbin
-    #
-    unless ( $sumbin =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$sumbin' has invalid characters.\n";
-    }
-    $sumbin = $1;
+    my($found_error) = 0;
 
-    $self->debug( 5, "executing $sumbin --check --ignore-missing $srcext" );
-    open( my $listing, "-|", $sumbin, "--check", "--ignore-missing", $srcext )
+    $self->debug( 5, "executing $sumbin --check $srcext" );
+    open( my $listing, "-|", $sumbin, "--check", $srcext )
       or croak "error executing command: stopped";
     while (<$listing>) {
         next unless ( defined($_) );
         chomp;
-        $self->debug( 9, "$srcext: $_" );
         if ( $_ =~ /:\s+OK/ ) {
-            $_ =~ s/:\s+OK.*//;
-            $self->debug( 9, "adding $_ to valid files" );
-            push( @res, $_ );
+           $self->debug( 9, "$srcext: $_ (this is OK)" );
+           $_ =~ s/:\s+OK.*//;
+           $self->debug( 9, "adding $_ to valid files" );
+           push( @res, $_ );
+        }
+        else {
+           $self->debug( 9, "$srcext: $_ (this is an ERROR)" );
+           $found_error = 1;
+           @res = ();
         }
     }
     close($listing);
+    if ( $found_error ) {
+        $self->debug( 1, "Some checksum error, skipping this for now" );
+        return();
+    }
+    # else        
     return (@res);
 }
 
@@ -385,10 +441,7 @@ sub wait_until_transfered() {
     return (undef) unless ( defined($file) );
     my ($dst)     = $self->config("dst");
     my ($dstfile) = $dst . "/" . $file;
-    unless ( $dstfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$dstfile' has invalid characters.\n";
-    }
-    $dstfile = $1;
+    $dstfile = $self->taintfilename($dstfile);
     my ($start) = time;
     my ($sleep) = $self->config("sleep") || 60;
     my ($i)     = 0;
@@ -407,21 +460,12 @@ sub wait_until_transfered() {
 sub mover() {
     my ($self)    = shift;
     my ($file)    = shift;
-    my ($nosplit) = shift;
     return (undef) unless ( defined($file) );
 
     my ($src)     = $self->config("src");
     my ($dst)     = $self->config("dst");
-    my ($srcfile) = $src . "/" . $file;
-    my ($dstfile) = $dst . "/" . $file;
-    unless ( $srcfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$srcfile' has invalid characters.\n";
-    }
-    $srcfile = $1;
-    unless ( $dstfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$dstfile' has invalid characters.\n";
-    }
-    $dstfile = $1;
+    my ($srcfile) = $self->taintfilename($src . "/" . $file);
+    my ($dstfile) = $self->taintfilename($dst . "/" . $file);
 
     $self->debug( 5, "trying to move $srcfile to $dstfile" );
 
@@ -433,33 +477,21 @@ sub mover() {
         $self->debug( 0, "unable to stat $srcfile: $!" );
         return (undef);
     }
-    $self->debug( 5, "$srcfile size is $size" );
-    my ($splitbytes) = $self->config("splitbytes");
-    $self->debug( 5, "splitbytes is $splitbytes" );
-
-    if ( defined($nosplit) || $size <= $splitbytes ) {
-        $self->debug("will not split file");
-    }
-    else {
-        my ($split) = 0;
-        $split = $self->splitter($srcfile);
-        return ($size) if ($split);
-    }
 
     my ($rc) = 0;
     $rc = move( $srcfile, $dstfile );
     if ($rc) {
-        $self->debug( 0, "move($srcfile,$dstfile) OK" );
+        $self->debug( 1, "move($srcfile,$dstfile) OK" );
     }
     else {
-        $self->debug( 0, "move($srcfile,$dstfile) error: $!" );
+        $self->debug( 1, "move($srcfile,$dstfile) error: $!" );
         return (undef);
     }
 
     return ($size);
 }
 
-sub prepare() {
+sub xxxrebuild() {
     my ($self)   = shift;
     my ($srcext) = shift;
 
@@ -484,66 +516,66 @@ sub prepare() {
         $self->debug( 0, "File $file is missing, trying to rebuild" );
         unlink($file);
 
-        my ($src);
-        foreach $src (<$file.part.*>) {
-            unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-                die "filename '$src' has invalid characters.\n";
-            }
-            $src = $1;
-            $self->debug( 9, "adding $src to valid files" );
-            my ($catbin) = $self->config("catbin");
-            delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
-
-            my ($rc) = system("$catbin $src >> $file");
-            unless ($rc) {
-                $self->debug( 0, "Adding $src to $file OK" );
-                unless ( unlink($src) ) {
-                    $self->debug( 0, "Unlinking $src failed: $!" );
-                    return (undef);
-                }
-                else {
-                    $self->debug( 0, "Unlinked $src OK" );
-                }
-            }
-            else {
-                $self->debug( 0, "Adding $src to $file failed: $!" );
-                return (undef);
-            }
-        }
 
     }
     close(IN);
     return (1);
 }
 
+sub taintfilename() {
+    my($self) = shift;
+    my($file) = shift;
+    unless ( $file =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
+            die "filename '$file' has invalid characters.\n";
+    }
+    $file = $1;
+    return($file);
+}
+
+sub popen() {
+    my($self) = shift;
+    my($cmd) = shift;
+    my(@res) = ();
+    unless ( open(POPEN,"$cmd |") ) {
+        die "$cmd: $!\n";
+    }
+    foreach ( <POPEN> ) {
+        chomp;
+        push(@res,$_);
+    }
+    close(POPEN);
+    return(@res);
+}
+
+
 sub transfer() {
     my ($self)        = shift;
     my ($ext)         = $self->config("ext");
-    my ($src)         = $self->config("src");
-    my ($dst)         = $self->config("dst");
+    my ($src)         = $self->taintfilename($self->config("src"));
+    my ($dst)         = $self->taintfilename($self->config("dst"));
     my ($sum)         = $self->config("sum");
     my ($maxtransfer) = $self->config("maxtransfer");
     my ($low)         = $self->config("low");
+    my ($zipbin)      = $self->config("zipbin");
+    my ($unzipbin)    = $self->config("unzipbin");
     my ($high)        = undef;
     my ($lastdebug)   = undef;
 
     my ($sleep) = $self->config("sleep") || 60;
 
-    unless ( $src =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$src' has invalid characters.\n";
-    }
-    $src = $1;
     $self->debug( 5, "src directory is $src" );
 
-    my $cwd = getcwd;
-    unless ( $cwd =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-        die "filename '$cwd' has invalid characters.\n";
-    }
-    $cwd = $1;
+    my $cwd = $self->taintfilename(getcwd);
     $self->debug( 5, "cwd is $cwd" );
     $self->config( "cwd", $cwd );
     chdir($cwd) or die "chdir($cwd): $!\n";
     chdir($src) or die "chdir($src): $!\n";
+
+     #     0    1    2     3     4    5     6     7     8
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = gmtime(time);
+    my $timestamp = sprintf("%04.4d%02.2d%02.2d_%02.2d%02.2d%02.2d",$year+1900,$mon+1,$mday,$hour,$min,$sec);
+
+    my ($start) = time;
 
     my ($srcext);
     my ($totsize) = 0;
@@ -577,84 +609,259 @@ sub transfer() {
         exit(0);
     }
 
-    my ($lastsrcext)  = undef;
-    my ($lastsrcfile) = undef;
-    foreach $srcext (@srcext) {
-        $lastsrcext = $srcext;
-        my ($start) = time;
-        $self->debug( 9, "starting time is $start " . localtime(time) );
 
-        $self->debug( 5, "processing $srcext" );
-        if ($high) {
-            unless ( $self->prepare($srcext) ) {
-                $self->debug( 0, "problem when preparing $srcext, skipping" );
-                next;
+    ########
+    # high #
+    ########
+    if ( $high ) {
+
+        my ($catbin) = $self->config("catbin");
+        delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
+
+        #
+        # Rebuild zipfile
+        #
+        foreach $srcext ( @srcext ) {
+            my($files) = 0;
+
+            chdir($cwd) or die "chdir($cwd): $!\n";
+            chdir($src) or die "chdir($src): $!\n";
+            $srcext = $self->taintfilename($srcext);
+            $self->debug( 9, "srcext is $srcext");
+
+            #
+            # Rebuild zipname
+            #
+            my($zipfile) = $srcext;
+            $zipfile =~ s/\.zip.*/.zip/;
+            my($basefile) = $zipfile;
+            $basefile =~ s/\.zip//;
+            $self->debug( 9, "zipfile is $zipfile");
+            unlink($zipfile);
+            $self->debug( 9, "removing $zipfile");
+
+            #
+            # create stats and debugfiles
+            #
+            my($statsfile) = $self->taintfilename($basefile . ".stats");
+            my($debugfile) = $self->taintfilename($basefile . ".debug");
+
+            # 
+            # get all files in this bundle and rebuild zipfile
+            #
+            my(@srcfiles) = $self->check_checksum($srcext);
+            my($srcfile);
+            foreach $srcfile ( @srcfiles ) {
+                $srcfile = $self->taintfilename($srcfile);
+                $self->debug( 9, "srcfile is $srcfile");
+
+                my ($rc) = system("$catbin $srcfile >> $zipfile");
+                if ( $rc ) {
+                    $self->debug( 1, "Adding $srcfile to $zipfile failed: $!" );
+                }
+                else {
+                    $self->debug( 1, "Adding $srcfile to $zipfile OK" );
+                }
+                $self->debug( 5, "Removing $srcfile" );
+                unlink($srcfile);
+            }
+
+            #
+            # check and unpack zipfile
+            #
+            my($zipcmd) = "$zipbin -v -T $zipfile";
+            $self->debug( 5, "Testing zipfile $zipcmd");
+            my($ziprc) = system($zipcmd);
+            $self->debug( 9, "ziprc: $ziprc");
+            
+            # 
+            # Change to cwd to get remote dest correct
+            #
+            chdir($cwd) or die "chdir($cwd): $!\n";
+
+            # 
+            # upload debug and statsfiles
+            #
+
+            my($rc) = 0;
+
+            my($statssrc) = $self->taintfilename($src . "/" . $statsfile);
+            my($statsdest) = $self->taintfilename($dst . "/" . $statsfile);
+            $rc = move($statssrc,$statsdest);
+            $self->debug( 9, "move $statssrc to $statsdest, rc=$rc");
+
+            my($debugsrc) = $self->taintfilename($src . "/" . $debugfile);
+            my($debugdest) = $self->taintfilename($dst . "/" . $debugfile);
+            $rc = move($debugsrc,$debugdest);
+            $self->debug( 9, "move $debugsrc to $debugdest, rc=$rc");
+
+            #
+            # 
+            # unpacking zipfile
+            #
+            $zipcmd = "$unzipbin -nj $src/$zipfile -d $dst";
+            $self->debug( 5, "Unzipping zipfile $zipcmd");
+            foreach ( $self->popen($zipcmd) ) {
+                $self->debug( 5, "unzip: $_");
+            }
+
+            #
+            # Remove zipfile
+            #
+            $rc = unlink("$src/$zipfile");
+            $self->debug( 5, "unlinking $src/$zipfile, rc=$rc");
+
+            #
+            # Remove asc file
+            $rc = unlink("$src/$srcext");
+            $self->debug( 5, "unlinking $src/$srcext, rc=$rc");
+        
+            #
+            # create and send som stats
+            #
+            my($stats) = "";
+            my ($end)   = time;
+            my ($dur) = $end - $start;
+            #my ($i)   = 0;
+            my ($pre) = "";
+            if ($low) {
+                $pre = "low";
+            }
+            else {
+                $pre = "high";
+            }
+            $stats .= $pre . "start=$start\n";
+            $stats .= $pre . "end=$end\n";
+            $stats .= $pre . "dur=$dur\n";
+            $stats .= $pre . "files=$files\n";
+            #$stats .= $pre . "sent=$sent\n";
+            $stats .= $pre . "srv=" . hostname . "\n";
+            $stats .= $pre . "ver=$Transfer::VERSION\n";
+            if ( open(STATS,">>",$statsdest) ) {
+                print STATS $stats;
+                close(STATS);
+            }
+            
+            #
+            # send debug log
+            #
+            $debugsrc = $self->taintfilename($self->get("debugname"));
+            $self->debug(9,"adding debuglog($debugsrc) to $debugdest");
+            $self->debug(9,"Exiting high side");
+            my($debugfh) = $self->get("debugfh");
+            close($debugfh);
+            if ( open(IN,"<",$debugsrc) ) {
+                if ( open(OUT,">>",$debugdest) ) {
+                    print OUT "\n\n\n";
+                    foreach ( <IN> ) {
+                        print OUT $_;
+                    }
+                }
+                close(IN);
+                close(OUT);
             }
         }
-        my (@srcext) = $self->checksum($srcext);
-        $self->debug( 9, "chdir($cwd)" );
-        chdir($cwd) or die "chdir($cwd): $!\n";
-        my ($srcfile);
+    }
+    #######
+    # low #
+    #######
+    elsif ( $low ) {
+        my ($lastsrcext)  = undef;
+        my ($lastsrcfile) = undef;
+
+        my($zipfile) = sprintf("zip.%s.zip",$timestamp);
+        $self->debug( 9, "zipfile is $zipfile");
+        my($ascfile) = sprintf("%s.asc",$zipfile);
+        $self->debug( 9, "ascfile is $ascfile");
+        my($debugfile) = $self->taintfilename(sprintf("%s/zip.%s.debug",$dst,$timestamp));
+        $self->debug( 9, "debugfile is $debugfile");
+        my($statsfile) = $self->taintfilename(sprintf("%s/zip.%s.stats",$dst,$timestamp));
+        $self->debug( 9, "statsfile is $statsfile");
+
         my ($sent) = 0;
         $files = 0;
         my (%fileinfo) = ();
+    
+        #
+        # Add all files to the zipfile
+        #
+        foreach $srcext (@srcext) {
+    
+            $lastsrcext = $srcext;
+            my ($start) = time;
+            $self->debug( 9, "starting time is $start " . localtime(time) );
+    
+            my (@srcext) = $self->check_checksum($srcext);
+            my ($srcfile);
+    
+            foreach $srcfile (@srcext,$srcext) {
+                $files++;
+                $self->debug( 5, "processing file $files, $srcfile" );
+                $srcfile = $self->taintfilename($srcfile);
+                $fileinfo{$files}=$srcfile;
 
-        foreach $srcfile (@srcext) {
-            $files++;
-            $self->debug( 5, "processing file $files, $srcfile" );
-            my ($size) = 0;
-
-            $fileinfo{$srcfile} = 0;
-
-            my ($retries) = 3;
-            while ( $retries-- ) {
-                if ($high) {    # Do not split
-                    $size = $self->mover( $srcfile, 1 );
+                my (
+                    $dev,  $ino,   $mode,  $nlink, $uid,     $gid, $rdev,
+                    $size, $atime, $mtime, $ctime, $blksize, $blocks
+                ) = stat($srcfile);
+                $sent += $size;
+                
+                my($zipcmd) = "$zipbin -m0 $zipfile $srcfile";
+                $self->debug( 5, "$zipcmd" );
+                foreach ( $self->popen($zipcmd) ) {
+                    $self->debug( 5, "zipcmd: $_" );
                 }
-                else {
-                    $size = $self->mover($srcfile);
-                }
-                last if ($size);
-                $self->debug( 0,
-"retrying($retries) transfer of $srcfile, sleeping $sleep seconds"
-                );
-                sleep($sleep);
-            }
-            unless ( defined($size) ) {
-                $self->debug( 0, "skipping $srcfile, to many retries" );
-                next;
-            }
-
-            $totsize += $size;
-            $sent    += $size;
-            $fileinfo{$srcfile} = $size;
-
-            if ($low) {
-                if ( $totsize > $maxtransfer ) {
-                    $self->debug(9,"totsize: $totsize, maxtransfer: $maxtransfer");
-                    $self->wait_until_transfered($srcfile);
-                    $totsize = 0;
-                }
-                $lastsrcfile = $srcfile;
             }
         }
-
-        if ( $low && $lastsrcfile ) {
-            $self->debug( 5, "last srcfile is $lastsrcfile" );
-            $self->wait_until_transfered($lastsrcfile);
+    
+        # 
+        # split zipfile into smaller chunks
+        #
+        my ($splitbytes) = $self->config("splitbytes");
+        $self->debug( 5, "splitbytes is $splitbytes" );
+    
+        my (@parts) = $self->splitter($zipfile);
+    
+        foreach ( @parts ) {
+            $self->debug( 9, "zipfile split part: $_" );
         }
-
+    
+        my(@checksum) = $self->create_checksum(@parts);
+    
+    
+        unlink($ascfile);
+        unless ( open(ASC,">>",$ascfile) ) {
+            die("writing $ascfile: $!\n");
+        }
+    
+        foreach ( @checksum ) {
+            $self->debug( 9, "checksum: $_" );
+            print ASC $_ . "\n";
+        }
+        close(ASC);
+    
+        # 
+        # move splitfiles and asc file to diod and wait for completion
+        # waiting for each file to vanish, i.e. moved to other side...
+        #
+        $self->debug( 9, "chdir($cwd)" );
+        chdir($cwd) or die "chdir($cwd): $!\n";
+    
+        my($part);
+        foreach $part ( @parts,$ascfile ) {
+            $self->debug(9,"movin $part to diod");
+            $self->mover($part);
+            $self->wait_until_transfered($part) if ( $diodwait );
+        }
+    
+        #
+        # create and send som stats
+        #
         my ($end)   = time;
-        my ($stats) = $src . "/" . $srcext . ".stats";
-        #
-        # Tainting $stats
-        #
-        unless ( $stats =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-            die "filename '$stats' has invalid characters.\n";
-        }
-        $stats = $1;
-        if ( open( STATS, ">>", $stats ) ) {
-            $self->debug( 5, "creating statistics file $stats" );
+        my($statsfh) = File::Temp->new();
+        
+        if ( $statsfh ) {
+            $self->debug( 5, "saving some stats to " . $statsfh->filename  );
             my ($dur) = $end - $start;
             my ($i)   = 0;
             my ($pre) = "";
@@ -664,79 +871,40 @@ sub transfer() {
             else {
                 $pre = "high";
             }
-            print STATS $pre . "start=$start\n";
-            print STATS $pre . "end=$end\n";
-            print STATS $pre . "dur=$dur\n";
-            print STATS $pre . "files=$files\n";
-            print STATS $pre . "sent=$sent\n";
-            print STATS $pre . "srv=" . hostname . "\n";
-            print STATS $pre . "ver=$Transfer::VERSION\n";
-
+            print $statsfh $pre . "start=$start\n";
+            print $statsfh $pre . "end=$end\n";
+            print $statsfh $pre . "dur=$dur\n";
+            print $statsfh $pre . "files=$files\n";
+            print $statsfh $pre . "sent=$sent\n";
+            print $statsfh $pre . "srv=" . hostname . "\n";
+            print $statsfh $pre . "ver=$Transfer::VERSION\n";
+        
             foreach ( sort keys %fileinfo ) {
-                print STATS $pre . "file"
-                  . $i++ . "="
-                  . $_
-                  . ",$fileinfo{$_}\n";
+                print $statsfh $pre . "file"
+                . $i++ . "="
+                . $_
+                . ",$fileinfo{$_}\n";
             }
-            close(STATS);
-            $self->debug( 9, "moving $stats" );
-            $self->mover( basename($stats), 1 );
+            close($statsfh);
+            $self->debug( 5, "copy statsfile to $statsfile" );
+            copy($statsfh->filename,$statsfile);
         }
-
-        $self->mover( $srcext, 1 );
-        if ($low) {
-            $self->wait_until_transfered($srcext);
-        }
-        chdir($src) or die "chdir($src): $!\n";
-        $self->debug( 5, "chdir($src)" );
-        $self->debug( 9, "ending time is $end " . localtime($end) );
-    }
-
-    if ( $self->get("debug") > 0 || $lastdebug ) {
-        my ($debugname) = $self->get("debugname");
-        chdir($cwd) or die "chdir($cwd): $!\n";
-        $self->debug("cwd: $cwd");
-        my ($lowdebugfile)  = $src . "/" . $lastsrcext . ".low";
-        my ($highdebugfile) = $src . "/";
-        $highdebugfile .= $lastdebug if ($lastdebug);
-        my ($debugfile);
-        my (@debugfiles) = ();
 
         #
-        # Tainting $lowdebugfile
+        # send debug log
         #
-        unless ( $lowdebugfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-            die "filename '$lowdebugfile' has invalid characters.\n";
-        }
-        $lowdebugfile = $1;
+        my($debugsrc) = $self->taintfilename($self->get("debugname"));
+        $self->debug(9,"copy debugfile to $debugfile");
+        $self->debug(9,"Exiting low side");
+        my($debugfh) = $self->get("debugfh");
+        close($debugfh);
+        copy($debugsrc,$debugfile);
+
         #
-        # Tainting $highdebugfile
+        # exit
         #
-        unless ( $highdebugfile =~ m#^([\/\w.-]+)$# ) {    # $1 is untainted
-            die "filename '$highdebugfile' has invalid characters.\n";
-        }
-        $highdebugfile = $1;
-
-        if ($high) {
-            $debugfile = $highdebugfile;
-        }
-        else {
-            $debugfile = $lowdebugfile;
-        }
-
-        push( @debugfiles, $lowdebugfile );
-        push( @debugfiles, $highdebugfile ) if ($high);
-
-        $self->debug( 9, "debugfile: $debugfile" );
-        $self->debug( 9, "debugname: $debugname" );
-        if ($debugname) {
-            my ($fh) = $self->get("debugfh");
-            close($fh);
-            copy( $debugname, $debugfile );
-            foreach (@debugfiles) {
-                $self->mover( basename($_), 1 );
-            }
-        }
+        print "Exiting low side...\n";
+        exit(0);
     }
 }
 
@@ -771,11 +939,11 @@ sub splitter() {
         return (undef);
     }
 
-    if ( $size < $splitbytes ) {
-        $self->debug( 5,
-            "No need too split $srcfile $size is less then $splitbytes" );
-        return (0);
-    }
+    #if ( $size < $splitbytes ) {
+    #    $self->debug( 5,
+    #        "No need too split $srcfile $size is less then $splitbytes" );
+    #    return (0);
+    #}
 
     my ($rc);
     #
@@ -804,19 +972,14 @@ sub splitter() {
     }
     close($listing);
 
+    my(@parts) = ();
     my ($splitpath);
     my($totsize) = 0;
     foreach $splitpath (<$srcfile.part.*>) {
-        my ($splitfile) = basename($splitpath);
-        $totsize += $self->mover( $splitfile, 1 );
-        $self->debug( 9, "splitfile: $splitfile, totsize: $totsize, maxtransfer: $maxtransfer" );
-        if ( $totsize > $maxtransfer ) {
-            $totsize = 0;
-            $self->wait_until_transfered($splitfile);
-        }
+        push(@parts,$splitpath);
     }
     unlink($srcfile);
-    return (1);
+    return (@parts);
 }
 
 sub debug() {

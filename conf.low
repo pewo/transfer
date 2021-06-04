@@ -1,3 +1,4 @@
 src=diod/low/src
 dst=diod/low/trans
 low=true
+splitbytes=100000

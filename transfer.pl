@@ -20,7 +20,7 @@ GetOptions(
 ) or die("Error in command line arguments\n");
 
 if ( $help ) {
-    print "Usage: $0 --conf=<config> --verbose --help\n";
+    print "Usage: $0 --conf=<config> --verbose --debug=<0-9> --help\n";
     exit(0);
 }
 print "conf: $conf\n" if ($debug);
