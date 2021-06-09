@@ -1,3 +1,7 @@
+#
+# Version 0.0.1
+# Date: Wed Jun  9 16:40:02 CEST 2021
+#
 package Object;
 
 use strict;
@@ -64,7 +68,7 @@ my ($debug) = 0;
 $Transfer::VERSION = '0.1.0';
 @Transfer::ISA     = qw(Object);
 
-my ($diodwait) = 0;
+my ($diodwait) = 1;
 
 ####################################
 # new(@_)
@@ -301,41 +305,23 @@ sub validateconf() {
     }
     $self->debug( 5, "setting catbin to $catbin" );
 
-    my ($zipbin) = undef;
-    if ( -x "/usr/bin/zip" ) {
-        $zipbin = "/usr/bin/zip";
+    my ($tarbin) = undef;
+    if ( -x "/usr/bin/tar" ) {
+        $tarbin = "/usr/bin/tar";
     }
-    elsif ( -x "/bin/zip" ) {
-        $zipbin = "/bin/zip";
+    elsif ( -x "/bin/tar" ) {
+        $tarbin = "/bin/tar";
     }
 
-    if ( defined($zipbin) && -x $zipbin ) {
-        $zipbin = $self->taintfilename($zipbin);
-        $self->config( "zipbin", $zipbin );
+    if ( defined($tarbin) && -x $tarbin ) {
+        $tarbin = $self->taintfilename($tarbin);
+        $self->config( "tarbin", $tarbin );
     }
     else {
-        $self->debug( 0, "Missing executable zip" );
+        $self->debug( 0, "Missing executable tar" );
         return (undef);
     }
-    $self->debug( 5, "setting zipbin to $zipbin" );
-
-    my ($unzipbin) = undef;
-    if ( -x "/usr/bin/unzip" ) {
-        $unzipbin = "/usr/bin/unzip";
-    }
-    elsif ( -x "/bin/unzip" ) {
-        $unzipbin = "/bin/unzip";
-    }
-
-    if ( defined($unzipbin) && -x $unzipbin ) {
-        $unzipbin = $self->taintfilename($unzipbin);
-        $self->config( "unzipbin", $unzipbin );
-    }
-    else {
-        $self->debug( 0, "Missing executable unzip" );
-        return (undef);
-    }
-    $self->debug( 5, "setting unzipbin to $unzipbin" );
+    $self->debug( 5, "setting tarbin to $tarbin" );
 
     my ($maxtransfer) = $self->config("maxtransfer");
     unless ($maxtransfer) {
@@ -556,8 +542,7 @@ sub transfer() {
     my ($sum)         = $self->config("sum");
     my ($maxtransfer) = $self->config("maxtransfer");
     my ($low)         = $self->config("low");
-    my ($zipbin)      = $self->config("zipbin");
-    my ($unzipbin)    = $self->config("unzipbin");
+    my ($tarbin)      = $self->config("tarbin");
     my ($high)        = undef;
     my ($lastdebug)   = undef;
 
@@ -619,7 +604,7 @@ sub transfer() {
         delete @ENV{qw(PATH IFS CDPATH ENV BASH_ENV)};
 
         #
-        # Rebuild zipfile
+        # Rebuild tarfile
         #
         foreach $srcext ( @srcext ) {
             my($files) = 0;
@@ -630,15 +615,15 @@ sub transfer() {
             $self->debug( 9, "srcext is $srcext");
 
             #
-            # Rebuild zipname
+            # Rebuild tarfile
             #
-            my($zipfile) = $srcext;
-            $zipfile =~ s/\.zip.*/.zip/;
-            my($basefile) = $zipfile;
-            $basefile =~ s/\.zip//;
-            $self->debug( 9, "zipfile is $zipfile");
-            unlink($zipfile);
-            $self->debug( 9, "removing $zipfile");
+            my($tarfile) = $srcext;
+            $tarfile =~ s/\.tar.*/.tar/;
+            my($basefile) = $tarfile;
+            $basefile =~ s/\.tar//;
+            $self->debug( 9, "tarfile is $tarfile");
+            unlink($tarfile);
+            $self->debug( 9, "removing $tarfile");
 
             #
             # create stats and debugfiles
@@ -647,7 +632,7 @@ sub transfer() {
             my($debugfile) = $self->taintfilename($basefile . ".debug");
 
             # 
-            # get all files in this bundle and rebuild zipfile
+            # get all files in this bundle and rebuild tarfile
             #
             my(@srcfiles) = $self->check_checksum($srcext);
             my($srcfile);
@@ -655,24 +640,24 @@ sub transfer() {
                 $srcfile = $self->taintfilename($srcfile);
                 $self->debug( 9, "srcfile is $srcfile");
 
-                my ($rc) = system("$catbin $srcfile >> $zipfile");
+                my ($rc) = system("$catbin $srcfile >> $tarfile");
                 if ( $rc ) {
-                    $self->debug( 1, "Adding $srcfile to $zipfile failed: $!" );
+                    $self->debug( 1, "Adding $srcfile to $tarfile failed: $!" );
                 }
                 else {
-                    $self->debug( 1, "Adding $srcfile to $zipfile OK" );
+                    $self->debug( 1, "Adding $srcfile to $tarfile OK" );
                 }
                 $self->debug( 5, "Removing $srcfile" );
                 unlink($srcfile);
             }
 
             #
-            # check and unpack zipfile
+            # check and tarfile
             #
-            my($zipcmd) = "$zipbin -v -T $zipfile";
-            $self->debug( 5, "Testing zipfile $zipcmd");
-            my($ziprc) = system($zipcmd);
-            $self->debug( 9, "ziprc: $ziprc");
+            my($tarcmd) = "$tarbin -tf $tarfile";
+            $self->debug( 5, "Testing tarfile $tarcmd");
+            my($tarrc) = system($tarcmd);
+            $self->debug( 9, "tarrc: $tarrc");
             
             # 
             # Change to cwd to get remote dest correct
@@ -697,19 +682,17 @@ sub transfer() {
 
             #
             # 
-            # unpacking zipfile
+            # unpacking tarfile
             #
-            $zipcmd = "$unzipbin -nj $src/$zipfile -d $dst";
-            $self->debug( 5, "Unzipping zipfile $zipcmd");
-            foreach ( $self->popen($zipcmd) ) {
-                $self->debug( 5, "unzip: $_");
+            $tarcmd = "$tarbin -C $dst -xvf $src/$tarfile";
+            $self->debug( 5, "Unpacking tarfile $tarcmd");
+            foreach ( $self->popen($tarcmd) ) {
+                $self->debug( 5, "tar: $_");
             }
 
-            #
-            # Remove zipfile
-            #
-            $rc = unlink("$src/$zipfile");
-            $self->debug( 5, "unlinking $src/$zipfile, rc=$rc");
+	    # Remove tarfile
+            $rc = unlink("$src/$tarfile");
+            $self->debug( 5, "unlinking $src/$tarfile, rc=$rc");
 
             #
             # Remove asc file
@@ -769,21 +752,22 @@ sub transfer() {
         my ($lastsrcext)  = undef;
         my ($lastsrcfile) = undef;
 
-        my($zipfile) = sprintf("zip.%s.zip",$timestamp);
-        $self->debug( 9, "zipfile is $zipfile");
-        my($ascfile) = sprintf("%s.asc",$zipfile);
+        my($tarfile) = sprintf("tar.%s.tar",$timestamp);
+        $self->debug( 9, "tarfile is $tarfile");
+	unlink($tarfile);
+        my($ascfile) = sprintf("%s.asc",$tarfile);
         $self->debug( 9, "ascfile is $ascfile");
-        my($debugfile) = $self->taintfilename(sprintf("%s/zip.%s.debug",$dst,$timestamp));
+        my($debugfile) = $self->taintfilename(sprintf("%s/tar.%s.debug",$dst,$timestamp));
         $self->debug( 9, "debugfile is $debugfile");
-        my($statsfile) = $self->taintfilename(sprintf("%s/zip.%s.stats",$dst,$timestamp));
+        my($statsfile) = $self->taintfilename(sprintf("%s/tar.%s.stats",$dst,$timestamp));
         $self->debug( 9, "statsfile is $statsfile");
 
         my ($sent) = 0;
         $files = 0;
         my (%fileinfo) = ();
-    
+	
         #
-        # Add all files to the zipfile
+        # Add all files to the tarfile
         #
         foreach $srcext (@srcext) {
     
@@ -806,24 +790,24 @@ sub transfer() {
                 ) = stat($srcfile);
                 $sent += $size;
                 
-                my($zipcmd) = "$zipbin -m0 $zipfile $srcfile";
-                $self->debug( 5, "$zipcmd" );
-                foreach ( $self->popen($zipcmd) ) {
-                    $self->debug( 5, "zipcmd: $_" );
+		my($tarcmd) = "$tarbin --remove-files -rvf $tarfile $srcfile";
+                $self->debug( 5, "$tarcmd" );
+                foreach ( $self->popen($tarcmd) ) {
+                    $self->debug( 5, "tarcmd: $_" );
                 }
             }
         }
     
         # 
-        # split zipfile into smaller chunks
+        # split tarfile into smaller chunks
         #
         my ($splitbytes) = $self->config("splitbytes");
         $self->debug( 5, "splitbytes is $splitbytes" );
     
-        my (@parts) = $self->splitter($zipfile);
+        my (@parts) = $self->splitter($tarfile);
     
         foreach ( @parts ) {
-            $self->debug( 9, "zipfile split part: $_" );
+            $self->debug( 9, "tarfile split part: $_" );
         }
     
         my(@checksum) = $self->create_checksum(@parts);
@@ -1002,8 +986,14 @@ sub debug() {
     my ( $package0, $filename0, $line0, $subroutine0 ) = caller(0);
     my ( $package1, $filename1, $line1, $subroutine1 ) = caller(1);
 
+
+	#  0    1    2     3     4    5     6     7     8
+	my($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+
+	my($stamp) = sprintf("%04.4d%02.2d%02.2d_%02.2d:%02.2d:%02.2d", $year+1900, $mon +1, $mday, $hour, $min, $sec);
+
     chomp($msg);
-    my ($str) = "DEBUG($level,$debug,$subroutine1:$line0): $msg";
+    my ($str) = "$stamp DEBUG($level,$debug,$subroutine1:$line0): $msg";
     if ($fh) {
         if ( openhandle($fh) ) {
             print $fh $str . "\n";
